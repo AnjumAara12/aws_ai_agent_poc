@@ -1,0 +1,8 @@
+aws_region        = "us-east-1"
+github_repository = "YOUR_GITHUB_USERNAME/YOUR_REPOSITORY"
+github_branch     = "main"
+bedrock_model_id  = "anthropic.claude-3-haiku-20240307-v1:0"
+
+# Find your public IP, then use it as a /32, for example ["203.0.113.10/32"].
+# The GitHub Actions deploy runner must connect from an allowed CIDR.
+cluster_public_access_cidrs = ["203.0.113.10/32"]

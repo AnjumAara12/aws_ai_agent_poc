@@ -1,0 +1,65 @@
+replicaCount: 2
+
+image:
+  repository: your-registry/ai-agent-api
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: nginx
+  host: agent.example.com
+  tls:
+    enabled: true
+    secretName: agent-api-tls
+
+serviceAccount:
+  create: true
+  name: ""
+  # Set to the IAM role ARN when using EKS IRSA.
+  roleArn: ""
+
+aws:
+  region: us-east-1
+  bedrockModelId: anthropic.claude-3-haiku-20240307-v1:0
+
+auth:
+  # Supply through a secret manager or a pre-created Kubernetes Secret.
+  existingSecret: ai-agent-api
+  secretKey: jwt-secret
+
+rateLimit: 30/minute
+maxPromptLength: 12000
+maxOutputTokens: 1024
+
+networkPolicy:
+  enabled: true
+  ingressNamespaceLabels:
+    kubernetes.io/metadata.name: ingress-nginx
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+# When enabled, requires the Argo Rollouts CRD/controller installed in the cluster.
+blueGreen:
+  enabled: false
+  autoPromotionEnabled: false

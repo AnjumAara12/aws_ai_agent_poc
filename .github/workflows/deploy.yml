@@ -1,0 +1,106 @@
+name: Build and deploy AI agent
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+  EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Run API tests
+        run: python -m pytest -q
+
+      - name: Check Python syntax
+        run: python -m compileall -q app
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image on pull requests
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+
+      - name: Configure AWS credentials
+        if: github.event_name == 'push'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        if: github.event_name == 'push'
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}-${{ github.run_attempt }}
+
+  deploy:
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: [self-hosted, linux]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Configure kubectl
+        run: aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - name: Deploy chart
+        env:
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          BEDROCK_MODEL_ID: ${{ vars.BEDROCK_MODEL_ID }}
+          BEDROCK_ROLE_ARN: ${{ vars.BEDROCK_ROLE_ARN }}
+        run: |
+          test -n "$JWT_SECRET"
+          test -n "$BEDROCK_MODEL_ID"
+          test -n "$BEDROCK_ROLE_ARN"
+          kubectl create secret generic ai-agent-api \
+            --from-literal=jwt-secret="$JWT_SECRET" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          helm upgrade --install ai-agent-api ./chart \
+            --set image.repository="$(aws sts get-caller-identity --query Account --output text).dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY" \
+            --set-string image.tag="$GITHUB_SHA-$GITHUB_RUN_ATTEMPT" \
+            --set aws.region="$AWS_REGION" \
+            --set aws.bedrockModelId="$BEDROCK_MODEL_ID" \
+            --set serviceAccount.name=ai-agent-api \
+            --set serviceAccount.roleArn="$BEDROCK_ROLE_ARN" \
+            --set ingress.enabled=false
+          kubectl rollout status deployment/ai-agent-api --timeout=180s

@@ -1,0 +1,79 @@
+{{- $fullName := include "ai-agent-api.fullname" . -}}
+{{- $labels := include "ai-agent-api.selectorLabels" . -}}
+{{- $container := dict
+  "name" "api"
+  "image" (printf "%s:%s" .Values.image.repository .Values.image.tag)
+  "imagePullPolicy" .Values.image.pullPolicy
+  "ports" (list (dict "name" "http" "containerPort" 8000 "protocol" "TCP"))
+  "env" (list
+    (dict "name" "AWS_REGION" "value" .Values.aws.region)
+    (dict "name" "BEDROCK_MODEL_ID" "value" .Values.aws.bedrockModelId)
+    (dict "name" "JWT_SECRET" "valueFrom" (dict "secretKeyRef" (dict "name" .Values.auth.existingSecret "key" .Values.auth.secretKey)))
+    (dict "name" "RATE_LIMIT" "value" .Values.rateLimit)
+    (dict "name" "MAX_PROMPT_LENGTH" "value" (printf "%v" .Values.maxPromptLength))
+    (dict "name" "MAX_OUTPUT_TOKENS" "value" (printf "%v" .Values.maxOutputTokens)))
+  "readinessProbe" (dict "httpGet" (dict "path" "/health/ready" "port" "http") "initialDelaySeconds" 5 "periodSeconds" 10)
+  "livenessProbe" (dict "httpGet" (dict "path" "/health/live" "port" "http") "initialDelaySeconds" 10 "periodSeconds" 20)
+  "resources" .Values.resources
+  "securityContext" (dict "allowPrivilegeEscalation" false "readOnlyRootFilesystem" true "capabilities" (dict "drop" (list "ALL")))
+-}}
+{{- if .Values.blueGreen.enabled }}
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: {{ $fullName }}
+  labels:
+    {{- include "ai-agent-api.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      {{- $labels | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- $labels | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "ai-agent-api.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - {{- toYaml $container | nindent 10 }}
+  strategy:
+    blueGreen:
+      activeService: {{ $fullName }}
+      previewService: {{ $fullName }}-preview
+      autoPromotionEnabled: {{ .Values.blueGreen.autoPromotionEnabled }}
+{{- else }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullName }}
+  labels:
+    {{- include "ai-agent-api.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      {{- $labels | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- $labels | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "ai-agent-api.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - {{- toYaml $container | nindent 10 }}
+{{- end }}
