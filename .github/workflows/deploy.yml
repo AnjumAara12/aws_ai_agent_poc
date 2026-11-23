@@ -17,6 +17,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
@@ -46,8 +47,9 @@ jobs:
         if: github.event_name == 'push'
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Log in to Amazon ECR
         if: github.event_name == 'push'
@@ -66,14 +68,16 @@ jobs:
     needs: build
     if: github.event_name == 'push'
     runs-on: [self-hosted, linux]
+
     steps:
       - uses: actions/checkout@v4
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Configure kubectl
         run: aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
@@ -92,9 +96,11 @@ jobs:
           test -n "$JWT_SECRET"
           test -n "$BEDROCK_MODEL_ID"
           test -n "$BEDROCK_ROLE_ARN"
+
           kubectl create secret generic ai-agent-api \
             --from-literal=jwt-secret="$JWT_SECRET" \
             --dry-run=client -o yaml | kubectl apply -f -
+
           helm upgrade --install ai-agent-api ./chart \
             --set image.repository="$(aws sts get-caller-identity --query Account --output text).dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY" \
             --set-string image.tag="$GITHUB_SHA-$GITHUB_RUN_ATTEMPT" \
@@ -103,4 +109,5 @@ jobs:
             --set serviceAccount.name=ai-agent-api \
             --set serviceAccount.roleArn="$BEDROCK_ROLE_ARN" \
             --set ingress.enabled=false
+
           kubectl rollout status deployment/ai-agent-api --timeout=180s
